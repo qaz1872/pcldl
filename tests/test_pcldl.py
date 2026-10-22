@@ -21,6 +21,8 @@ sys.path.insert(0, ROOT)
 
 import pcldl  # noqa: E402
 
+pcldl.setup_console()          # Windows 控制台默认 cp1252，不先切 UTF-8 打印中文会崩
+
 SCRIPT = os.path.join(ROOT, "pcldl.py")
 WORK = tempfile.mkdtemp(prefix="pcldl-test-")
 

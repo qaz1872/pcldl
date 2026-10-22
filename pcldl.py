@@ -528,7 +528,10 @@ class NetFile:
     # ---------------------------------------------------------- 显示
     def _log(self, msg: str) -> None:
         with self._print_lock:
-            sys.stdout.write("\r" + Term.CLR + msg + "\n")
+            try:
+                sys.stdout.write("\r" + Term.CLR + msg + "\n")
+            except UnicodeEncodeError:            # cp1252 等窄编码控制台
+                sys.stdout.write("\r" + msg.encode("ascii", "replace").decode("ascii") + "\n")
             sys.stdout.flush()
 
     def _report(self, done: int, force: bool = False) -> None:
@@ -551,7 +554,10 @@ class NetFile:
                 f"{Term.GRN}{human(self.speed)}/s{Term.RST}  "
                 f"分片{len(self.segments):<2d}  {eta_s}  ")
         with self._print_lock:
-            sys.stdout.write(line + Term.CLR)
+            try:
+                sys.stdout.write(line + Term.CLR)
+            except UnicodeEncodeError:            # 窄编码控制台退化成 ASCII 条
+                sys.stdout.write(line.encode("ascii", "replace").decode("ascii"))
             sys.stdout.flush()
 
     # ---------------------------------------------------------- 合并校验
