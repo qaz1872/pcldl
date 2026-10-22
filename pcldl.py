@@ -1128,8 +1128,9 @@ def main(argv: list[str] | None = None) -> int:
   pcldl URL --sha256 <hex>
 """)
     ap.add_argument("urls", nargs="+", help="下载地址，多个即视为同一文件的镜像")
-    ap.add_argument("-o", "--out")
-    ap.add_argument("-n", "--name")
+    ap.add_argument("-o", "--out", help="输出文件路径（已存在的目录则按 URL 取名放进去）")
+    ap.add_argument("-d", "--dir", help="输出目录，文件名按 URL 自动取")
+    ap.add_argument("-n", "--name", help="指定文件名")
     ap.add_argument("--limit", type=parse_size, default="0", help="限速（0=不限）")
     ap.add_argument("-x", "--threads", type=int, default=16,
                     help="最大线程数，对应 PCL 的 ToolDownloadThread+1")
@@ -1160,15 +1161,21 @@ def main(argv: list[str] | None = None) -> int:
     if a.ua:
         headers["User-Agent"] = a.ua
 
-    out = a.out
-    if not out:
+    out = None
+    if a.dir:
+        os.makedirs(a.dir, exist_ok=True)
+        out = os.path.join(a.dir, a.name or derive_name(a.urls[0]))
+    elif a.out:
+        if os.path.isdir(a.out) or a.out.endswith(("/", "\\")):
+            os.makedirs(a.out, exist_ok=True)
+            out = os.path.join(a.out, a.name or derive_name(a.urls[0]))
+        elif a.name:
+            os.makedirs(a.out, exist_ok=True)
+            out = os.path.join(a.out, a.name)
+        else:
+            out = a.out
+    else:
         out = a.name or derive_name(a.urls[0])
-    elif os.path.isdir(out) or out.endswith(("/", "\\")):
-        os.makedirs(out, exist_ok=True)
-        out = os.path.join(out, a.name or derive_name(a.urls[0]))
-    elif a.name:
-        os.makedirs(out, exist_ok=True)
-        out = os.path.join(out, a.name)
 
     mgr = NetManager(limit_high=a.limit, thread_limit=max(1, a.threads))
     nf = NetFile(a.urls, out, mgr, headers=headers, insecure=a.insecure,
