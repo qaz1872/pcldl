@@ -86,7 +86,8 @@ def fmt_eta(sec: float) -> str:
 # ------------------------------------------------------------------ 任务
 class Task:
     def __init__(self, urls, out, *, limit=0, threads=16,
-                 headers=None, hashes=None, state="queued"):
+                 headers=None, hashes=None, state="queued",
+                 size=-1, done=0, elapsed=0.0):
         self.id = uuid.uuid4().hex[:12]
         self.urls = list(urls)
         self.out = out
@@ -97,12 +98,13 @@ class Task:
 
         self.state = state
         self.error = ""
-        self.done = 0
-        self.size = -1
+        self.done = done
+        self.size = size
         self.speed = 0.0
         self.live = 0
         self.elapsed = 0.0
         self.peak = 0.0
+        self.elapsed = elapsed
 
         self.nf = None
         self.worker: threading.Thread | None = None
@@ -112,13 +114,16 @@ class Task:
         return {"id": self.id, "urls": self.urls, "out": self.out,
                 "limit": self.limit, "threads": self.threads,
                 "headers": self.headers, "hashes": self.hashes,
+                "size": self.size, "done": self.done, "elapsed": self.elapsed,
                 "state": "queued" if self.state == "running" else self.state}
 
     @classmethod
     def from_dict(cls, d):
         return cls(d["urls"], d["out"], limit=d.get("limit", 0),
                    threads=d.get("threads", 16), headers=d.get("headers"),
-                   hashes=d.get("hashes"), state=d.get("state", "paused"))
+                   hashes=d.get("hashes"), state=d.get("state", "paused"),
+                   size=d.get("size", -1), done=d.get("done", 0),
+                   elapsed=d.get("elapsed", 0.0))
 
     @property
     def name(self) -> str:
@@ -200,20 +205,21 @@ class TaskCard(tk.Frame):
         btns = tk.Frame(self, bg=CARD)
         btns.pack(fill="x", pady=(10, 12), **pad)
         self.btn_main = self._btn(btns, "开始", self._on_main, primary=True)
-        self._btn(btns, "打开文件夹", self._on_open)
-        self._btn(btns, "删除", self._on_delete)
+        self.btn_open = self._btn(btns, "打开文件夹", self._on_open)
+        self.btn_del = self._btn(btns, "删除", self._on_delete)
+        self.btn_main.grid(row=0, column=0, padx=(0, 8))
+        self.btn_open.grid(row=0, column=1, padx=(0, 8))
+        self.btn_del.grid(row=0, column=2)
         self.lbl_err = tk.Label(btns, text="", bg=CARD, fg=ERR, font=FONT_S, anchor="w")
-        self.lbl_err.pack(side="left", padx=(10, 0))
+        self.lbl_err.grid(row=0, column=3, padx=(10, 0), sticky="w")
 
     def _btn(self, parent, text, cmd, primary=False):
-        b = tk.Button(parent, text=text, command=cmd, font=FONT_S, bd=0,
-                      relief="flat", cursor="hand2", padx=12, pady=4,
-                      bg=ACCENT if primary else "#eef2f8",
-                      fg="#ffffff" if primary else TEXT,
-                      activebackground=ACCENT_D if primary else "#e2e8f2",
-                      activeforeground="#ffffff" if primary else TEXT)
-        b.pack(side="left", padx=(0, 8))
-        return b
+        return tk.Button(parent, text=text, command=cmd, font=FONT_S, bd=0,
+                         relief="flat", cursor="hand2", padx=12, pady=4,
+                         bg=ACCENT if primary else "#eef2f8",
+                         fg="#ffffff" if primary else TEXT,
+                         activebackground=ACCENT_D if primary else "#e2e8f2",
+                         activeforeground="#ffffff" if primary else TEXT)
 
     # ---- 交互
     def _on_main(self):
@@ -267,9 +273,14 @@ class TaskCard(tk.Frame):
 
         self.lbl_err.config(text=t.error[:60] if t.state == "failed" else "")
 
-        txt = "暂停" if t.state == "running" else ("打开文件夹" if t.state == "done" else "开始")
+        txt = {"running": "暂停", "done": "打开文件夹"}.get(t.state, "开始")
         if self.btn_main.cget("text") != txt:
             self.btn_main.config(text=txt)
+        # 完成态下主按钮已经能打开目录，隐藏重复的那个
+        if t.state == "done":
+            self.btn_open.grid_remove()
+        else:
+            self.btn_open.grid()
 
 
 # ------------------------------------------------------------------ 新建任务
