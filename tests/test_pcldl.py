@@ -127,6 +127,14 @@ def clean(out):
             os.remove(p)
 
 
+def make_file(urls, out, **kw):
+    """新版引擎需要显式传入 NetManager（对应 ModNet 的全局单例）"""
+    limit = kw.pop("limit", 0)
+    threads = kw.pop("max_threads", 16)
+    mgr = pcldl.NetManager(limit_high=limit, thread_limit=threads)
+    return pcldl.NetFile(urls, out, mgr, **kw)
+
+
 def case(title, ok, detail=""):
     print(f"[{'PASS' if ok else 'FAIL'}] {title}  {detail}")
     return ok
@@ -141,16 +149,16 @@ def t_normal():
     out = os.path.join(WORK, "a.bin")
     clean(out)
 
-    nf = pcldl.NetFile([f"http://127.0.0.1:{srv.server_address[1]}/a.bin"], out,
-                       max_threads=8, quiet=True)
+    nf = make_file([f"http://127.0.0.1:{srv.server_address[1]}/a.bin"], out,
+                   max_threads=8, quiet=True)
     t0 = time.monotonic()
     nf.run()
     el = time.monotonic() - t0
     srv.shutdown()
 
-    ok = sha256(out) == hashlib.sha256(data).hexdigest() and len(nf.segments) >= 2
-    r = case("正常下载（动态分片）", ok,
-             f"{el:.2f}s  {size/el/1048576:.1f}MB/s  分片={len(nf.segments)}"
+    ok = sha256(out) == hashlib.sha256(data).hexdigest() and len(nf.threads) >= 1
+    r = case("正常下载", ok,
+             f"{el:.2f}s  {size/el/1048576:.1f}MB/s  线程={len(nf.threads)}"
              f"  请求={st.reqs}  重试={nf.retry_total}")
     clean(out)
     return r
@@ -160,7 +168,7 @@ def t_normal():
 def t_resume():
     size = 32 * 1024 * 1024
     data = os.urandom(size)
-    H, st = make_handler(data, rate_per_conn=4 * 1024 * 1024)
+    H, st = make_handler(data, rate_per_conn=1 * 1024 * 1024)
     srv = serve(H)
     url = f"http://127.0.0.1:{srv.server_address[1]}/r.bin"
     out = os.path.join(WORK, "b.bin")
@@ -168,9 +176,11 @@ def t_resume():
 
     p = subprocess.Popen([sys.executable, SCRIPT, url, "-o", out, "-x", "6", "-q"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=WORK)
-    deadline = time.time() + 40
+    deadline = time.time() + 60
+    started = time.time()
     while time.time() < deadline:
-        if st.bytes > size * 0.45 or p.poll() is not None:
+        # 至少跑满 2s，确保状态文件已经落盘过一次
+        if (st.bytes > size * 0.45 and time.time() - started > 2.0) or p.poll() is not None:
             break
         time.sleep(0.05)
     p.kill()
@@ -183,12 +193,11 @@ def t_resume():
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=WORK)
     srv.shutdown()
     total = st.bytes
-    ok = (rc == 0
-          and sha256(out) == hashlib.sha256(data).hexdigest()
-          and total < size * 1.9)
+    hash_ok = sha256(out) == hashlib.sha256(data).hexdigest() if os.path.exists(out) else False
+    ok = rc == 0 and hash_ok and total < size * 1.9
     r = case("中断后续传", ok,
              f"首次 {first/1048576:.1f}MB + 续传共 {total/1048576:.1f}MB"
-             f"（文件 {size/1048576:.0f}MB）  state={state_ok}")
+             f"（文件 {size/1048576:.0f}MB）  rc={rc} hash={hash_ok} state={state_ok}")
     clean(out)
     return r
 
@@ -203,9 +212,9 @@ def t_failover():
     out = os.path.join(WORK, "c.bin")
     clean(out)
 
-    nf = pcldl.NetFile([f"http://127.0.0.1:{srvb.server_address[1]}/c.bin",
-                        f"http://127.0.0.1:{srvg.server_address[1]}/c.bin"],
-                       out, max_threads=4, quiet=True)
+    nf = make_file([f"http://127.0.0.1:{srvb.server_address[1]}/c.bin",
+                    f"http://127.0.0.1:{srvg.server_address[1]}/c.bin"],
+                   out, max_threads=4, quiet=True)
     nf.run()
     srvb.shutdown()
     srvg.shutdown()
@@ -223,11 +232,15 @@ def t_plain():
     srv = serve(H)
     out = os.path.join(WORK, "d.bin")
     clean(out)
-    nf = pcldl.NetFile([f"http://127.0.0.1:{srv.server_address[1]}/d.bin"], out, quiet=True)
+    nf = make_file([f"http://127.0.0.1:{srv.server_address[1]}/d.bin"], out, quiet=True)
     nf.run()
     srv.shutdown()
-    ok = sha256(out) == hashlib.sha256(data).hexdigest() and nf.plain
-    r = case("不支持 Range 降级单流", ok, f"plain={nf.plain}")
+    # 服务端无视 Range 时，切分尝试必然失败一次（SetLength 对不上），
+    # 之后退化成单线程从头下载；这里只校验最终结果与线程数
+    ok = (sha256(out) == hashlib.sha256(data).hexdigest()
+          and len(nf.threads) == 1)
+    r = case("不支持 Range 退化为单线程", ok,
+             f"线程={len(nf.threads)} 重试={nf.retry_total}")
     clean(out)
     return r
 
@@ -240,8 +253,8 @@ def t_limit():
     srv = serve(H)
     out = os.path.join(WORK, "e.bin")
     clean(out)
-    nf = pcldl.NetFile([f"http://127.0.0.1:{srv.server_address[1]}/e.bin"], out,
-                       limit=4 * 1024 * 1024, max_threads=4, quiet=True)
+    nf = make_file([f"http://127.0.0.1:{srv.server_address[1]}/e.bin"], out,
+                   limit=4 * 1024 * 1024, max_threads=4, quiet=True)
     t0 = time.monotonic()
     nf.run()
     el = time.monotonic() - t0
@@ -253,9 +266,37 @@ def t_limit():
     return r
 
 
+# --------------------------------------------------------------- F 慢源加分片
+def t_slow_split():
+    """PCL 只在聚合速度低于下限（初值 256KB/s）时加分片。
+
+    这里让服务端把每条连接限到 120KB/s，单连接喂不满下限，引擎应当自动
+    切分到 2~3 条连接，等聚合速度超过下限后停止。
+    """
+    size = 3 * 1024 * 1024
+    data = os.urandom(size)
+    H, st = make_handler(data, rate_per_conn=120 * 1024)
+    srv = serve(H)
+    out = os.path.join(WORK, "f.bin")
+    clean(out)
+    nf = make_file([f"http://127.0.0.1:{srv.server_address[1]}/f.bin"], out,
+                   max_threads=16, quiet=True)
+    t0 = time.monotonic()
+    nf.run()
+    el = time.monotonic() - t0
+    srv.shutdown()
+    ok = (sha256(out) == hashlib.sha256(data).hexdigest()
+          and len(nf.threads) >= 2)
+    r = case("慢源自动加分片", ok,
+             f"{el:.1f}s  线程={len(nf.threads)}  请求={st.reqs}")
+    clean(out)
+    return r
+
+
 def main():
     try:
-        results = [t_plain(), t_failover(), t_limit(), t_normal(), t_resume()]
+        results = [t_plain(), t_failover(), t_limit(), t_normal(),
+                   t_slow_split(), t_resume()]
     finally:
         shutil.rmtree(WORK, ignore_errors=True)
     print("\n" + ("ALL PASS" if all(results) else "SOME FAILED"))
