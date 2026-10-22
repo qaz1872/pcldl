@@ -30,7 +30,7 @@ python pcldl.py https://example.com/big.iso   # 命令行
 - 每条任务实时显示进度 / 速度 / 剩余时间 / 活动线程数
 - **暂停即断点续传**；关掉程序再打开，任务列表和进度都还在
 - 新建任务支持多镜像、线程上限、限速、Cookie / Referer、SHA-256 校验
-- 单个 exe 约 11MB，无运行时依赖
+- 单个 exe 约 11MB，无运行时依赖；图标由 `make_icon.py` 用 Pillow 生成
 
 自己打包：
 

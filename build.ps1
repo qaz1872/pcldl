@@ -4,8 +4,13 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
+# 图标（改了 make_icon.py 后重新生成）
+if (-not (Test-Path "pcldl.ico")) {
+    python make_icon.py
+}
+
 python -m pip install --upgrade --quiet pyinstaller
-python -m PyInstaller --noconfirm --onefile --windowed --name pcldl `
+python -m PyInstaller --noconfirm --onefile --windowed --name pcldl --icon pcldl.ico `
     --distpath dist --workpath build --specpath . pcldlgui.py
 
 Write-Host ""
