@@ -1,12 +1,17 @@
 # pcldl
 
 > [PCL2](https://github.com/Meloong-Git/PCL) 内置下载引擎 `Modules/Base/ModNet.vb` 的 Python 移植。
-> 单文件、零依赖、逐段对照源码移植，关键逻辑标注了 VB 行号。
+> 带图形界面、可打包成单文件 exe、零第三方依赖，关键逻辑标注了 VB 行号。
 
-PCL2 的下载引擎有个和 aria2 完全相反的设计：**分片数量不预先决定，而是在下载过程中按"当前连接喂不喂得满"动态生长**；段的边界不存在任何变量里，而是由链表中下一个节点的起点反推——插入一个新段，前一段就自动收缩了。
+![界面](docs/screenshot.png)
+
+PCL2 的下载引擎有个和 aria2 完全相反的设计：**分片数量不预先决定，而是在下载过程中按"当前连接喂不喂得满"动态生长**；段的边界不存在任何变量里，而是由链表中下一个节点起点反推——插入一个新段，前一段就自动收缩了。
+
+两种用法，同一个引擎：
 
 ```bash
-python pcldl.py https://example.com/big.iso
+python pcldlgui.py                            # 图形界面
+python pcldl.py https://example.com/big.iso   # 命令行
 ```
 
 ```
@@ -14,6 +19,26 @@ python pcldl.py https://example.com/big.iso
   完成 -> ls-lR.gz
   用时 3.5s  平均 10.6MB/s  峰值 16.8MB/s  线程上限 16  重试 0 次
 ```
+
+---
+
+## 桌面端
+
+从 [Releases](https://github.com/qaz1872/pcldl/releases) 下载 `pcldl.exe`，双击即用，不用装 Python。
+
+- 多任务队列，可限制同时下载数（默认 3）
+- 每条任务实时显示进度 / 速度 / 剩余时间 / 活动线程数
+- **暂停即断点续传**；关掉程序再打开，任务列表和进度都还在
+- 新建任务支持多镜像、线程上限、限速、Cookie / Referer、SHA-256 校验
+- 单个 exe 约 11MB，无运行时依赖
+
+自己打包：
+
+```powershell
+.\build.ps1        # 产物 dist\pcldl.exe
+```
+
+界面是 tkinter 写的（`pcldlgui.py`），下载逻辑完全复用 `pcldl.py`，没有第二套实现。
 
 ---
 
@@ -76,16 +101,16 @@ StartPosition = FilePieceMax.DownloadEnd - FilePieceMax.DownloadUndone * 0.4
 
 ## 和上游不一样的地方
 
-移植不是照抄。上游有几处不适合命令行场景，做了明确改动：
+移植不是照抄。上游有几处不适合命令行 / 桌面场景，做了明确改动：
 
 | 项 | 上游 | 本仓库 | 原因 |
 |---|---|---|---|
-| 跨进程续传 | 无（每次 `Start` 会清空 `Download` 缓存目录，`:1809`） | 有，状态每 1s 落盘 | 命令行被杀是常态 |
+| 跨进程续传 | 无（每次 `Start` 会清空 `Download` 缓存目录，`:1809`） | 有，状态每 1s 落盘 | 关掉程序再打开要能continue |
 | 临时文件名 | `{FileUuid}_{ThreadUuid}_{随机}.tmp` | `{urlHash}_{起始偏移}.tmp` | 续传要能找回 |
 | Range 起点 | 恒为 `DownloadStart`（因为 Done 恒为 0） | `Start + Done` | 续传必需 |
 | 限速额度 | 无上限累积 | 钳到 1 秒额度 | 避免空闲后突发 |
 | 未知大小文件 | `DownloadDone > 0` 就合并（`:1066`） | 等线程自然结束 | 避免截断 chunked 响应 |
-| 界面 | WPF | 终端进度条（同样的 `1-(1-p)^0.9` 曲线） | — |
+| 界面 | WPF | tkinter（同样用 `1-(1-p)^0.9` 进度曲线） | 零依赖 |
 
 ---
 
@@ -96,7 +121,8 @@ Python ≥ 3.9，无第三方依赖：
 ```bash
 git clone https://github.com/qaz1872/pcldl.git
 cd pcldl
-python pcldl.py --help
+python pcldlgui.py          # 图形界面
+python pcldl.py --help      # 命令行
 ```
 
 或装成命令：
@@ -118,7 +144,7 @@ pcldl https://example.com/big.iso
 pcldl https://example.com/big.iso -o D:/dl/big.iso --limit 8M -x 16
 
 # 多镜像（同一文件的不同源，自动负载 + 容错）
-pcldl https://a.com/x.iso https://b.com/x.iso -o x.iso
+pcldl https://a.com/x.iso https://b.com/x.iso -d D:/dl
 
 # 下完校验
 pcldl URL --sha256 3f7a...e21
@@ -156,12 +182,14 @@ pcldl URL -o D:/dl/big.iso
 [PASS] 令牌桶限速 4MB/s          实测 4.29MB/s
 [PASS] 正常下载                  24MB  线程=5
 [PASS] 慢源自动加分片            120KB/s 单连接 → 线程=10
-[PASS] 中断后续传                32MB  首跑14.5MB + 续传共34.7MB  hash=True
+[PASS] 中断后续传                32MB  首跑14.5MB + 续传34.7MB  hash=True
 ```
 
 ```bash
 python tests/test_pcldl.py
 ```
+
+图形端的暂停/续传另外验证过：24MB 文件下到 17.4MB 暂停，状态落盘，重开后 1.2s 补齐，哈希一致。
 
 真实网络（清华源 36.9MB）：3.5s，均速 10.6MB/s，`gzip` 完整解压校验通过（416,176,744 字节）。
 

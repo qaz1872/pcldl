@@ -130,6 +130,8 @@ def parse_size(text: str) -> int:
 
 def setup_console() -> None:
     for s in (sys.stdout, sys.stderr):
+        if s is None:            # --windowed / pythonw 下 stdout 为 None
+            continue
         try:
             s.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
@@ -147,7 +149,7 @@ def setup_console() -> None:
 
 
 class Term:
-    ON = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+    ON = bool(sys.stdout and sys.stdout.isatty()) and not os.environ.get("NO_COLOR")
     DIM = "\x1b[2m" if ON else ""
     RED = "\x1b[31m" if ON else ""
     GRN = "\x1b[32m" if ON else ""
@@ -410,6 +412,7 @@ class NetFile:
         self._last_print = 0.0
         self._plock = threading.Lock()
         self.show = not quiet
+        self._stop_requested = False
 
         ctx = ssl.create_default_context()
         if insecure:
@@ -771,6 +774,14 @@ class NetFile:
             return
         self.fail(ex)                                            # :1127
 
+    def request_stop(self) -> None:
+        """外部（GUI）请求暂停：让 run() 正常收尾并保留断点，而不是抛异常。"""
+        self._stop_requested = True
+        with self.lock_state:
+            if self.state < NetState.Finished:
+                self.state = NetState.Canceled
+        self.manager.stop()
+
     def fail(self, ex: BaseException) -> None:
         """ModNet.vb:1251"""
         with self.lock_state:
@@ -989,6 +1000,8 @@ class NetFile:
 
     # ---------------------------------------------------------- 显示
     def _log(self, msg: str) -> None:
+        if sys.stdout is None:
+            return
         with self._plock:
             try:
                 sys.stdout.write("\r" + Term.CLR + msg + "\n")
@@ -997,7 +1010,7 @@ class NetFile:
             sys.stdout.flush()
 
     def _report(self, force: bool = False) -> None:
-        if not self.show:
+        if not self.show or sys.stdout is None:
             return
         now = time.monotonic()
         interval = 0.2 if sys.stdout.isatty() else 5.0
@@ -1061,6 +1074,10 @@ class NetFile:
                     self.save_state()
 
                 if st == NetState.Canceled:
+                    if self._stop_requested:
+                        self.save_state()
+                        self.manager.stop()
+                        return self.out
                     if err:
                         raise err
                     raise RuntimeError("下载被中断")

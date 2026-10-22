@@ -3,6 +3,7 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+*.spec
 
 # 运行时产物
 .pcl_tmp/
