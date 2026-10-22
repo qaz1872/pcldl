@@ -1,0 +1,5 @@
+﻿# 统一换行，避免 Windows 下 CRLF 污染
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.gif binary
